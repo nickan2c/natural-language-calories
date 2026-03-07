@@ -2,9 +2,19 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
+    // User-specific meals
+    match /users/{userId}/meals/{date}/entries/{entryId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // User-specific food cache
+    match /users/{userId}/foods/{foodId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // Deny all other access
     match /{document=**} {
-      // Open access for personal/small app use. Add auth rules for production.
-      allow read, write: if true;
+      allow read, write: if false;
     }
   }
 }

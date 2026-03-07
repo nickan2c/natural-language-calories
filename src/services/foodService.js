@@ -18,10 +18,12 @@ import { getTodayDateString } from '../utils/dateUtils';
 /**
  * Check if a food is in the cache
  */
-export async function checkFoodCache(foodName) {
+export async function checkFoodCache(foodName, userId) {
   try {
+    if (!userId) throw new Error('User ID required');
+
     const normalizedName = foodName.toLowerCase().trim();
-    const foodRef = doc(db, 'foods', normalizedName);
+    const foodRef = doc(db, 'users', userId, 'foods', normalizedName);
     const foodDoc = await getDoc(foodRef);
 
     if (foodDoc.exists()) {
@@ -37,10 +39,12 @@ export async function checkFoodCache(foodName) {
 /**
  * Add a food to the cache
  */
-export async function addToCache(foodName, calories, protein) {
+export async function addToCache(foodName, calories, protein, userId) {
   try {
+    if (!userId) throw new Error('User ID required');
+
     const normalizedName = foodName.toLowerCase().trim();
-    const foodRef = doc(db, 'foods', normalizedName);
+    const foodRef = doc(db, 'users', userId, 'foods', normalizedName);
 
     await setDoc(foodRef, {
       name: normalizedName,
@@ -58,9 +62,11 @@ export async function addToCache(foodName, calories, protein) {
 /**
  * Get all cached foods
  */
-export async function getAllCachedFoods() {
+export async function getAllCachedFoods(userId) {
   try {
-    const foodsRef = collection(db, 'foods');
+    if (!userId) throw new Error('User ID required');
+
+    const foodsRef = collection(db, 'users', userId, 'foods');
     const q = query(foodsRef, orderBy('name', 'asc'));
 
     const querySnapshot = await getDocs(q);
@@ -83,9 +89,11 @@ export async function getAllCachedFoods() {
 /**
  * Update a cached food
  */
-export async function updateCachedFood(foodId, updates) {
+export async function updateCachedFood(foodId, updates, userId) {
   try {
-    const foodRef = doc(db, 'foods', foodId);
+    if (!userId) throw new Error('User ID required');
+
+    const foodRef = doc(db, 'users', userId, 'foods', foodId);
 
     await updateDoc(foodRef, {
       name: updates.name.toLowerCase().trim(),
@@ -103,9 +111,11 @@ export async function updateCachedFood(foodId, updates) {
 /**
  * Delete a cached food
  */
-export async function deleteCachedFood(foodId) {
+export async function deleteCachedFood(foodId, userId) {
   try {
-    const foodRef = doc(db, 'foods', foodId);
+    if (!userId) throw new Error('User ID required');
+
+    const foodRef = doc(db, 'users', userId, 'foods', foodId);
     await deleteDoc(foodRef);
 
     console.log(`Deleted cached food: ${foodId}`);
@@ -118,9 +128,11 @@ export async function deleteCachedFood(foodId) {
 /**
  * Create a meal entry
  */
-export async function createMealEntry(date, foodName, calories, protein, meal, quantity = 1) {
+export async function createMealEntry(date, foodName, calories, protein, meal, quantity = 1, userId) {
   try {
-    const entriesRef = collection(db, 'meals', date, 'entries');
+    if (!userId) throw new Error('User ID required');
+
+    const entriesRef = collection(db, 'users', userId, 'meals', date, 'entries');
 
     const entry = {
       foodName,
@@ -151,10 +163,12 @@ export async function createMealEntry(date, foodName, calories, protein, meal, q
 /**
  * Get meal entries for a specific date
  */
-export async function getEntriesForDate(date = null) {
+export async function getEntriesForDate(date = null, userId) {
   try {
+    if (!userId) throw new Error('User ID required');
+
     const targetDate = date || getTodayDateString();
-    const entriesRef = collection(db, 'meals', targetDate, 'entries');
+    const entriesRef = collection(db, 'users', userId, 'meals', targetDate, 'entries');
     const q = query(entriesRef, orderBy('createdAt', 'desc'));
 
     const querySnapshot = await getDocs(q);
@@ -179,17 +193,19 @@ export async function getEntriesForDate(date = null) {
 /**
  * Get today's meal entries (convenience wrapper)
  */
-export async function getTodayEntries() {
-  return getEntriesForDate();
+export async function getTodayEntries(userId) {
+  return getEntriesForDate(null, userId);
 }
 
 /**
  * Main workflow: Process natural language food text
  * Returns { entries, logs }
  */
-export async function processFoodText(text, mealType, date = null) {
+export async function processFoodText(text, mealType, date = null, userId) {
   const logs = [];
   const targetDate = date || getTodayDateString();
+
+  if (!userId) throw new Error('User ID required');
 
   const addLog = (type, label, message) => {
     logs.push({
@@ -220,7 +236,7 @@ export async function processFoodText(text, mealType, date = null) {
       const qty = parseFloat(quantity) || 1;
 
       // Check cache for base nutrition (per single serving)
-      let baseNutrition = await checkFoodCache(food);
+      let baseNutrition = await checkFoodCache(food, userId);
       let rawNutritionResponse = null;
 
       if (baseNutrition) {
@@ -236,7 +252,7 @@ export async function processFoodText(text, mealType, date = null) {
         addLog('llm', `Nutrition Estimate (${food} x1)`, rawNutritionResponse);
 
         // Store in cache (single serving)
-        await addToCache(food, baseNutrition.calories, baseNutrition.protein);
+        await addToCache(food, baseNutrition.calories, baseNutrition.protein, userId);
         addLog('cache', 'Cached', `Saved "${food}" to cache (per serving: ${baseNutrition.calories} cal, ${baseNutrition.protein}g protein)`);
       }
 
@@ -253,7 +269,8 @@ export async function processFoodText(text, mealType, date = null) {
         scaledCalories,
         scaledProtein,
         mealType,
-        qty
+        qty,
+        userId
       );
 
       createdEntries.push(entry);
@@ -273,9 +290,11 @@ export async function processFoodText(text, mealType, date = null) {
  * Handle food with known nutrition (user provides calories/protein)
  * Returns { entries, logs, hasKnownNutrition: boolean }
  */
-export async function handleKnownNutrition(text, mealType, date = null) {
+export async function handleKnownNutrition(text, mealType, date = null, userId) {
   const logs = [];
   const targetDate = date || getTodayDateString();
+
+  if (!userId) throw new Error('User ID required');
 
   const addLog = (type, label, message) => {
     logs.push({
@@ -321,7 +340,7 @@ export async function handleKnownNutrition(text, mealType, date = null) {
     }
 
     // Add to cache (always cache per-item values)
-    await addToCache(food, perItemCalories, perItemProtein);
+    await addToCache(food, perItemCalories, perItemProtein, userId);
     addLog('cache', 'Cached', `Saved "${food}" to cache (per item: ${perItemCalories} cal, ${perItemProtein}g)`);
 
     // Create meal entry with total values
@@ -331,7 +350,8 @@ export async function handleKnownNutrition(text, mealType, date = null) {
       totalCalories,
       totalProtein,
       mealType,
-      qty
+      qty,
+      userId
     );
 
     addLog('success', 'Complete', `Added ${qty}× "${food}" to ${mealType} (${totalCalories} cal, ${totalProtein}g protein)`);
@@ -348,9 +368,11 @@ export async function handleKnownNutrition(text, mealType, date = null) {
  * Handle correction of a food entry
  * Returns { updatedEntry, logs, correctionMade: boolean }
  */
-export async function handleCorrection(text, currentEntries, date = null) {
+export async function handleCorrection(text, currentEntries, date = null, userId) {
   const logs = [];
   const targetDate = date || getTodayDateString();
+
+  if (!userId) throw new Error('User ID required');
 
   const addLog = (type, label, message) => {
     logs.push({
@@ -392,11 +414,11 @@ export async function handleCorrection(text, currentEntries, date = null) {
 
     // Update the cache
     const normalizedFoodName = matchingEntry.foodName.toLowerCase();
-    await addToCache(normalizedFoodName, calories, protein);
+    await addToCache(normalizedFoodName, calories, protein, userId);
     addLog('cache', 'Cache Updated', `Updated cache for "${normalizedFoodName}"`);
 
     // Update the Firestore entry
-    const entryRef = doc(db, 'meals', targetDate, 'entries', matchingEntry.id);
+    const entryRef = doc(db, 'users', userId, 'meals', targetDate, 'entries', matchingEntry.id);
 
     await updateDoc(entryRef, {
       calories,
@@ -423,10 +445,12 @@ export async function handleCorrection(text, currentEntries, date = null) {
 /**
  * Update a meal entry
  */
-export async function updateMealEntry(entryId, updates, date = null) {
+export async function updateMealEntry(entryId, updates, date = null, userId) {
   try {
+    if (!userId) throw new Error('User ID required');
+
     const targetDate = date || getTodayDateString();
-    const entryRef = doc(db, 'meals', targetDate, 'entries', entryId);
+    const entryRef = doc(db, 'users', userId, 'meals', targetDate, 'entries', entryId);
 
     console.log(`Updating entry ${entryId} with:`, updates);
     await updateDoc(entryRef, updates);
@@ -441,10 +465,12 @@ export async function updateMealEntry(entryId, updates, date = null) {
 /**
  * Delete a meal entry
  */
-export async function deleteMealEntry(entryId, date = null) {
+export async function deleteMealEntry(entryId, date = null, userId) {
   try {
+    if (!userId) throw new Error('User ID required');
+
     const targetDate = date || getTodayDateString();
-    const entryRef = doc(db, 'meals', targetDate, 'entries', entryId);
+    const entryRef = doc(db, 'users', userId, 'meals', targetDate, 'entries', entryId);
 
     await deleteDoc(entryRef);
 

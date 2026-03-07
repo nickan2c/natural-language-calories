@@ -1,5 +1,8 @@
 import { useState, useEffect } from 'react';
 import './App.css';
+import { onAuthStateChanged, signOut } from 'firebase/auth';
+import { auth } from './services/firebase';
+import Auth from './components/Auth';
 import FoodInput from './components/FoodInput';
 import DailySummary from './components/DailySummary';
 import MealList from './components/MealList';
@@ -21,6 +24,8 @@ import {
 import { getTodayDateString } from './utils/dateUtils';
 
 function App() {
+  const [user, setUser] = useState(null);
+  const [authLoading, setAuthLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('log'); // 'log' or 'database'
   const [currentDate, setCurrentDate] = useState(getTodayDateString());
   const [entries, setEntries] = useState([]);
@@ -32,19 +37,32 @@ function App() {
   const [llmLogs, setLlmLogs] = useState([]);
 
   useEffect(() => {
-    loadEntriesForDate(currentDate);
-  }, [currentDate]);
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      setUser(currentUser);
+      setAuthLoading(false);
+    });
+
+    return () => unsubscribe();
+  }, []);
 
   useEffect(() => {
-    if (activeTab === 'database') {
+    if (user) {
+      loadEntriesForDate(currentDate);
+    }
+  }, [currentDate, user]);
+
+  useEffect(() => {
+    if (user && activeTab === 'database') {
       loadCachedFoods();
     }
-  }, [activeTab]);
+  }, [activeTab, user]);
 
   async function loadEntriesForDate(date) {
+    if (!user) return;
+
     setInitialLoad(true);
     try {
-      const dateEntries = await getEntriesForDate(date);
+      const dateEntries = await getEntriesForDate(date, user.uid);
       setEntries(dateEntries);
     } catch (err) {
       console.error('Error loading entries:', err);
@@ -59,9 +77,11 @@ function App() {
   }
 
   async function loadCachedFoods() {
+    if (!user) return;
+
     setDbLoading(true);
     try {
-      const foods = await getAllCachedFoods();
+      const foods = await getAllCachedFoods(user.uid);
       setCachedFoods(foods);
     } catch (err) {
       console.error('Error loading cached foods:', err);
@@ -71,13 +91,25 @@ function App() {
     }
   }
 
+  async function handleSignOut() {
+    try {
+      await signOut(auth);
+      setEntries([]);
+      setCachedFoods([]);
+      setLlmLogs([]);
+    } catch (err) {
+      console.error('Sign out error:', err);
+      setError('Failed to sign out');
+    }
+  }
+
   async function handleFoodSubmit(text, mealType) {
     setLoading(true);
     setError(null);
 
     try {
       // First, check if user is providing known nutrition
-      const knownNutritionResult = await handleKnownNutrition(text, mealType, currentDate);
+      const knownNutritionResult = await handleKnownNutrition(text, mealType, currentDate, user.uid);
 
       if (knownNutritionResult.hasKnownNutrition) {
         // Handle food with known nutrition
@@ -90,7 +122,7 @@ function App() {
         setLlmLogs((prev) => [...prev, ...logs]);
       } else {
         // Not known nutrition, check if this is a correction
-        const correctionResult = await handleCorrection(text, entries, currentDate);
+        const correctionResult = await handleCorrection(text, entries, currentDate, user.uid);
 
         if (correctionResult.correctionMade) {
           // Handle correction
@@ -107,7 +139,7 @@ function App() {
           setLlmLogs((prev) => [...prev, ...knownNutritionResult.logs, ...logs]);
         } else {
           // Not a correction, process as normal food entry
-          const { entries: newEntries, logs } = await processFoodText(text, mealType, currentDate);
+          const { entries: newEntries, logs } = await processFoodText(text, mealType, currentDate, user.uid);
 
           // Add new entries to the top of the list
           setEntries((prev) => [...newEntries, ...prev]);
@@ -126,7 +158,7 @@ function App() {
 
   async function handleUpdateEntry(entryId, updates) {
     try {
-      await updateMealEntry(entryId, updates, currentDate);
+      await updateMealEntry(entryId, updates, currentDate, user.uid);
 
       // Update the entry in the list
       setEntries((prev) =>
@@ -142,7 +174,7 @@ function App() {
 
   async function handleDeleteEntry(entryId) {
     try {
-      await deleteMealEntry(entryId, currentDate);
+      await deleteMealEntry(entryId, currentDate, user.uid);
 
       // Remove the entry from the list
       setEntries((prev) => prev.filter((entry) => entry.id !== entryId));
@@ -154,7 +186,7 @@ function App() {
 
   async function handleUpdateCachedFood(foodId, updates) {
     try {
-      await updateCachedFood(foodId, updates);
+      await updateCachedFood(foodId, updates, user.uid);
 
       // Reload cached foods
       await loadCachedFoods();
@@ -166,7 +198,7 @@ function App() {
 
   async function handleDeleteCachedFood(foodId) {
     try {
-      await deleteCachedFood(foodId);
+      await deleteCachedFood(foodId, user.uid);
 
       // Remove from list
       setCachedFoods((prev) => prev.filter((food) => food.id !== foodId));
@@ -176,10 +208,25 @@ function App() {
     }
   }
 
+  if (authLoading) {
+    return (
+      <div className="app">
+        <div className="loading-auth">Loading...</div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return <Auth />;
+  }
+
   return (
     <div className="app">
       <header className="app-header">
         <h1>Natural Language Calorie Logger</h1>
+        <button onClick={handleSignOut} className="sign-out-btn">
+          Sign Out
+        </button>
       </header>
 
       {activeTab === 'log' && (
