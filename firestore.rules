@@ -1,0 +1,10 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      // Open access for personal/small app use. Add auth rules for production.
+      allow read, write: if true;
+    }
+  }
+}
