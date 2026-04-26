@@ -12,6 +12,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: npm ci && npm run build
+        env:
+          VITE_NOTION_TOKEN: ${{ secrets.VITE_NOTION_TOKEN }}
+          VITE_NOTION_DATABASE_ID: ${{ secrets.VITE_NOTION_DATABASE_ID }}
       - uses: FirebaseExtended/action-hosting-deploy@v0
         with:
           repoToken: ${{ secrets.GITHUB_TOKEN }}

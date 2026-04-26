@@ -218,6 +218,60 @@ Look for quantity numbers at the start. Look for "each", "per", "apiece" to dete
 }
 
 /**
+ * Generate a Gen Z style response after logging food
+ * Returns { message: string, rawResponse: string }
+ */
+export async function generateGenZResponse(foodsLogged, totalCalories, totalProtein, dailyCalories, dailyProtein) {
+  try {
+    const response = await axios.post(
+      GROQ_API_URL,
+      {
+        model: MODEL,
+        messages: [
+          {
+            role: 'system',
+            content: `You are a Gen Z fitness buddy who's supportive, funny, and uses modern slang. Generate a short (1-2 sentences) response after someone logs their food. Be encouraging, use Gen Z slang naturally (bestie, ngl, slaps, ate, slay, lowkey, highkey, fr, no cap, etc.), and reference their progress. Keep it fun and casual. Don't use emojis excessively - maybe 1-2 max. Return ONLY the message text, no JSON.
+
+Examples:
+- "logged bestie! that's 420 cals, you're at 1240/2000 today. we're eating it up literally"
+- "yesss 35g protein fr? that's giving health icon, you're slaying today ngl"
+- "ok lowkey that's a lot of calories but no judgment here, we support the grind"
+- "560 cals logged! you're at 1800 today which slaps, keep it up bestie"
+- "sheesh that protein tho 💪 you're highkey hitting your goals today no cap"`
+          },
+          {
+            role: 'user',
+            content: `Foods logged: ${foodsLogged.join(', ')}. Total added: ${totalCalories} calories, ${totalProtein}g protein. Daily total so far: ${dailyCalories} calories, ${dailyProtein}g protein.`
+          }
+        ],
+        temperature: 0.9,
+        max_tokens: 100
+      },
+      {
+        headers: {
+          'Authorization': `Bearer ${GROQ_API_KEY}`,
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+
+    const content = response.data.choices[0].message.content.trim();
+
+    return {
+      message: content,
+      rawResponse: content
+    };
+  } catch (error) {
+    console.error('Error generating Gen Z response:', error);
+
+    // Return a fallback message
+    return {
+      message: `Logged ${totalCalories} calories and ${totalProtein}g protein! You're at ${dailyCalories} calories today.`
+    };
+  }
+}
+
+/**
  * Parse a correction message
  * Returns { isCorrection: boolean, food: string, calories: number, protein: number, rawResponse: string }
  */

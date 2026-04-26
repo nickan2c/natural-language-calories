@@ -1,9 +1,22 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 
-function FoodInput({ onSubmit, loading }) {
+function FoodInput({ onSubmit, loading, successMessage }) {
   const [text, setText] = useState('');
   const [mealType, setMealType] = useState('breakfast');
   const [tipsDismissed, setTipsDismissed] = useState(false);
+  const [showSuccess, setShowSuccess] = useState(false);
+
+  // Show success message when it changes and is not empty
+  useEffect(() => {
+    if (successMessage) {
+      setShowSuccess(true);
+      // Auto-hide after 5 seconds
+      const timer = setTimeout(() => {
+        setShowSuccess(false);
+      }, 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [successMessage]);
 
   const handleSubmit = (e) => {
     e.preventDefault();
@@ -58,7 +71,13 @@ function FoodInput({ onSubmit, loading }) {
         </div>
       )}
 
-      {!loading && !tipsDismissed && (
+      {!loading && showSuccess && successMessage && (
+        <div className="success-message">
+          {successMessage}
+        </div>
+      )}
+
+      {!loading && !showSuccess && !tipsDismissed && (
         <div className="input-help">
           <span>💡 <strong>Tips:</strong> Know the nutrition? Just say "I had a [food], it was [X]kcal [Y]g protein". Made a mistake? Type "actually the [food] was [X]kcal [Y]g protein" to correct it!</span>
           <button

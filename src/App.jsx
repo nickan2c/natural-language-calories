@@ -8,6 +8,7 @@ import DailySummary from './components/DailySummary';
 import MealList from './components/MealList';
 import LLMLog from './components/LLMLog';
 import FoodDatabase from './components/FoodDatabase';
+import Charts from './components/Charts';
 import DateNavigator from './components/DateNavigator';
 import {
   processFoodText,
@@ -22,11 +23,12 @@ import {
   deleteCachedFood
 } from './services/foodService';
 import { getTodayDateString } from './utils/dateUtils';
+import { generateGenZResponse } from './services/llmService';
 
 function App() {
   const [user, setUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState('log'); // 'log' or 'database'
+  const [activeTab, setActiveTab] = useState('log'); // 'log', 'database', or 'charts'
   const [currentDate, setCurrentDate] = useState(getTodayDateString());
   const [entries, setEntries] = useState([]);
   const [cachedFoods, setCachedFoods] = useState([]);
@@ -35,6 +37,7 @@ function App() {
   const [dbLoading, setDbLoading] = useState(false);
   const [error, setError] = useState(null);
   const [llmLogs, setLlmLogs] = useState([]);
+  const [successMessage, setSuccessMessage] = useState('');
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
@@ -106,8 +109,12 @@ function App() {
   async function handleFoodSubmit(text, mealType) {
     setLoading(true);
     setError(null);
+    setSuccessMessage(''); // Clear previous message
 
     try {
+      let newEntriesAdded = [];
+      let allEntries = [];
+
       // First, check if user is providing known nutrition
       const knownNutritionResult = await handleKnownNutrition(text, mealType, currentDate, user.uid);
 
@@ -116,7 +123,11 @@ function App() {
         const { entries: newEntries, logs } = knownNutritionResult;
 
         // Add new entries to the top of the list
-        setEntries((prev) => [...newEntries, ...prev]);
+        setEntries((prev) => {
+          allEntries = [...newEntries, ...prev];
+          return allEntries;
+        });
+        newEntriesAdded = newEntries;
 
         // Add logs
         setLlmLogs((prev) => [...prev, ...logs]);
@@ -129,11 +140,13 @@ function App() {
           const { updatedEntry, logs } = correctionResult;
 
           // Update the entry in the list
-          setEntries((prev) =>
-            prev.map((entry) =>
+          setEntries((prev) => {
+            allEntries = prev.map((entry) =>
               entry.id === updatedEntry.id ? updatedEntry : entry
-            )
-          );
+            );
+            return allEntries;
+          });
+          newEntriesAdded = [updatedEntry];
 
           // Add logs (include known nutrition check + correction logs)
           setLlmLogs((prev) => [...prev, ...knownNutritionResult.logs, ...logs]);
@@ -142,11 +155,34 @@ function App() {
           const { entries: newEntries, logs } = await processFoodText(text, mealType, currentDate, user.uid);
 
           // Add new entries to the top of the list
-          setEntries((prev) => [...newEntries, ...prev]);
+          setEntries((prev) => {
+            allEntries = [...newEntries, ...prev];
+            return allEntries;
+          });
+          newEntriesAdded = newEntries;
 
           // Add logs to the log list (include all checks + food processing logs)
           setLlmLogs((prev) => [...prev, ...knownNutritionResult.logs, ...correctionResult.logs, ...logs]);
         }
+      }
+
+      // Generate Gen Z response
+      if (newEntriesAdded.length > 0) {
+        const totalCaloriesAdded = newEntriesAdded.reduce((sum, e) => sum + (e.calories || 0), 0);
+        const totalProteinAdded = newEntriesAdded.reduce((sum, e) => sum + (e.protein || 0), 0);
+        const dailyCalories = allEntries.reduce((sum, e) => sum + (e.calories || 0), 0);
+        const dailyProtein = allEntries.reduce((sum, e) => sum + (e.protein || 0), 0);
+        const foodNames = newEntriesAdded.map(e => e.food);
+
+        const genZResponse = await generateGenZResponse(
+          foodNames,
+          totalCaloriesAdded,
+          totalProteinAdded,
+          dailyCalories,
+          dailyProtein
+        );
+
+        setSuccessMessage(genZResponse.message);
       }
     } catch (err) {
       console.error('Error processing food:', err);
@@ -244,6 +280,12 @@ function App() {
           Daily Log
         </button>
         <button
+          className={`tab ${activeTab === 'charts' ? 'active' : ''}`}
+          onClick={() => setActiveTab('charts')}
+        >
+          Charts
+        </button>
+        <button
           className={`tab ${activeTab === 'database' ? 'active' : ''}`}
           onClick={() => setActiveTab('database')}
         >
@@ -256,7 +298,7 @@ function App() {
 
         {activeTab === 'log' ? (
           <>
-            <FoodInput onSubmit={handleFoodSubmit} loading={loading} />
+            <FoodInput onSubmit={handleFoodSubmit} loading={loading} successMessage={successMessage} />
 
             <DailySummary entries={entries} />
 
@@ -269,6 +311,8 @@ function App() {
               onDelete={handleDeleteEntry}
             />
           </>
+        ) : activeTab === 'charts' ? (
+          <Charts />
         ) : (
           <FoodDatabase
             foods={cachedFoods}
