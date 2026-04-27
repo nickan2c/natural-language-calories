@@ -282,6 +282,107 @@ Examples:
 }
 
 /**
+ * Route a user message to the right intent
+ * Returns { intent: "food"|"chat"|"correction"|"known_nutrition"|"data_update", mealType?: string, date?: string, field?: string, value?: number }
+ */
+export async function routeMessage(text) {
+  try {
+    const now = new Date();
+    const hour = now.getHours();
+    const defaultMeal = hour < 11 ? 'breakfast' : hour < 15 ? 'lunch' : hour < 20 ? 'dinner' : 'snack';
+    const today = now.toISOString().split('T')[0];
+
+    const response = await axios.post(
+      GROQ_API_URL,
+      {
+        model: MODEL,
+        messages: [
+          {
+            role: 'system',
+            content: `You are a message router for a calorie tracking chatbot. Classify the user's message into one of these intents and return ONLY valid JSON:
+
+1. "food" - User is logging food they ate. Return:
+   {"intent": "food", "mealType": "breakfast|lunch|dinner|snack"}
+
+2. "known_nutrition" - User is logging food AND providing specific calorie/protein values. Return:
+   {"intent": "known_nutrition"}
+
+3. "correction" - User is correcting a previously logged food's nutrition. Look for "actually", "should be", etc. Return:
+   {"intent": "correction"}
+
+4. "data_update" - User wants to update a Notion field like steps, weight, calories, protein for a specific date. Return:
+   {"intent": "data_update", "date": "YYYY-MM-DD", "updates": {"steps": number, "calories": number, "protein": number}}
+   Only include fields the user mentions. For "yesterday" use the day before today. For "today" use today's date.
+
+5. "chat" - Casual conversation, greetings, questions about progress, anything not food-related. Return:
+   {"intent": "chat"}
+
+Today is ${today}. Default meal type based on current time: ${defaultMeal}.
+
+Examples:
+"2 eggs and toast" → {"intent": "food", "mealType": "${defaultMeal}"}
+"had a protein bar for lunch, 200cal 20g" → {"intent": "known_nutrition"}
+"actually the eggs were 180cal" → {"intent": "correction"}
+"steps yesterday were 12000" → {"intent": "data_update", "date": "${new Date(now - 86400000).toISOString().split('T')[0]}", "updates": {"steps": 12000}}
+"14k steps today" → {"intent": "data_update", "date": "${today}", "updates": {"steps": 14000}}
+"sup bro" → {"intent": "chat"}
+"how am i doing this week" → {"intent": "chat"}`
+          },
+          { role: 'user', content: text }
+        ],
+        temperature: 0.1,
+        max_tokens: 200
+      },
+      { headers: { 'Authorization': `Bearer ${GROQ_API_KEY}`, 'Content-Type': 'application/json' } }
+    );
+
+    const content = response.data.choices[0].message.content.trim();
+    return JSON.parse(content);
+  } catch (error) {
+    console.error('Error routing message:', error);
+    return { intent: 'food', mealType: 'snack' };
+  }
+}
+
+/**
+ * Generate a casual chat response (non-food messages)
+ * Returns { message: string }
+ */
+export async function generateChatResponse(text, weeklyContext = null, dailyCalories = 0, dailyProtein = 0) {
+  try {
+    let contextInfo = '';
+    if (weeklyContext && weeklyContext.length > 0) {
+      const recentDays = weeklyContext.map(d =>
+        `${d.date}: ${d.calories ?? '?'} cal, ${d.protein ?? '?'}g protein, ${d.steps ?? '?'} steps`
+      ).join('\n');
+      contextInfo = `\n\nUser's recent data:\n${recentDays}\nToday so far: ${dailyCalories} cal, ${dailyProtein}g protein. Target: 2700 cal, 180g protein.`;
+    }
+
+    const response = await axios.post(
+      GROQ_API_URL,
+      {
+        model: MODEL,
+        messages: [
+          {
+            role: 'system',
+            content: `You are a Gen Z fitness buddy chatbot. You're supportive, funny, and use modern slang naturally. You help track calories and fitness. Keep responses short (1-3 sentences). Use Gen Z slang (bestie, ngl, fr, no cap, lowkey, etc.) but don't overdo it. If the user asks about their progress, reference their data. Don't use emojis excessively - maybe 1-2 max.${contextInfo}`
+          },
+          { role: 'user', content: text }
+        ],
+        temperature: 0.9,
+        max_tokens: 150
+      },
+      { headers: { 'Authorization': `Bearer ${GROQ_API_KEY}`, 'Content-Type': 'application/json' } }
+    );
+
+    return { message: response.data.choices[0].message.content.trim() };
+  } catch (error) {
+    console.error('Error generating chat response:', error);
+    return { message: "yo my brain glitched for a sec, try again bestie" };
+  }
+}
+
+/**
  * Parse a correction message
  * Returns { isCorrection: boolean, food: string, calories: number, protein: number, rawResponse: string }
  */

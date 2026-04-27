@@ -154,3 +154,48 @@ export async function syncToNotion(dateStr, calories, protein) {
     console.error('Error syncing to Notion:', error);
   }
 }
+
+/**
+ * Update specific fields on a Notion row (steps, calories, protein)
+ */
+export async function updateNotionFields(dateStr, updates) {
+  try {
+    const existing = await findNotionRowByDate(dateStr);
+
+    const properties = {};
+    if (updates.steps !== undefined) properties['Steps'] = { number: updates.steps };
+    if (updates.calories !== undefined) properties['Calories'] = { number: updates.calories };
+    if (updates.protein !== undefined) properties['Protein (g)'] = { number: updates.protein };
+
+    if (Object.keys(properties).length === 0) return;
+
+    if (existing) {
+      const res = await notionFetch(`/v1/pages/${existing.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ properties }),
+      });
+      if (!res.ok) throw new Error(`Notion update failed: ${res.status}`);
+    } else {
+      const dayLabel = new Date(dateStr + 'T00:00:00').toLocaleDateString('en-US', {
+        weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
+      });
+      const res = await notionFetch('/v1/pages', {
+        method: 'POST',
+        body: JSON.stringify({
+          parent: { database_id: DATABASE_ID },
+          properties: {
+            'Day': { title: [{ text: { content: dayLabel } }] },
+            'Date': { date: { start: dateStr } },
+            ...properties,
+          },
+        }),
+      });
+      if (!res.ok) throw new Error(`Notion create failed: ${res.status}`);
+    }
+    console.log(`Updated Notion for ${dateStr}:`, updates);
+    return true;
+  } catch (error) {
+    console.error('Error updating Notion fields:', error);
+    return false;
+  }
+}

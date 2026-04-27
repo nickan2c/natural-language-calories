@@ -17,7 +17,12 @@ function Charts() {
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [mode, setMode] = useState('days'); // 'days' or 'month'
   const [range, setRange] = useState('30');
+  const [selectedMonth, setSelectedMonth] = useState(() => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  });
 
   useEffect(() => {
     loadData();
@@ -37,26 +42,45 @@ function Charts() {
     }
   }
 
+  // Get available months from data
+  const availableMonths = [...new Set(data.map(d => d.date?.substring(0, 7)).filter(Boolean))].sort();
+
   const filteredData = (() => {
+    if (mode === 'month') {
+      return data.filter(d => d.date?.startsWith(selectedMonth));
+    }
     if (range === 'all') return data;
-    const days = parseInt(range);
-    return data.slice(-days);
+    return data.slice(-parseInt(range));
   })();
 
   const formatDate = (dateStr) => {
     const d = new Date(dateStr + 'T00:00:00');
-    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    return mode === 'month'
+      ? d.getDate().toString()
+      : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
   };
 
-  const avgCalories = filteredData.length
-    ? Math.round(filteredData.reduce((s, d) => s + (d.calories || 0), 0) / filteredData.filter(d => d.calories).length)
-    : 0;
-  const avgProtein = filteredData.length
-    ? Math.round(filteredData.reduce((s, d) => s + (d.protein || 0), 0) / filteredData.filter(d => d.protein).length)
-    : 0;
-  const avgSteps = filteredData.length
-    ? Math.round(filteredData.reduce((s, d) => s + (d.steps || 0), 0) / filteredData.filter(d => d.steps).length)
-    : 0;
+  const formatMonth = (monthStr) => {
+    const [y, m] = monthStr.split('-');
+    return new Date(y, m - 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+  };
+
+  const safeAvg = (arr, key) => {
+    const valid = arr.filter(d => d[key] != null);
+    return valid.length ? Math.round(valid.reduce((s, d) => s + d[key], 0) / valid.length) : 0;
+  };
+
+  const avgCalories = safeAvg(filteredData, 'calories');
+  const avgProtein = safeAvg(filteredData, 'protein');
+  const avgSteps = safeAvg(filteredData, 'steps');
+
+  const shiftMonth = (dir) => {
+    const idx = availableMonths.indexOf(selectedMonth);
+    const newIdx = idx + dir;
+    if (newIdx >= 0 && newIdx < availableMonths.length) {
+      setSelectedMonth(availableMonths[newIdx]);
+    }
+  };
 
   if (loading) {
     return <div className="charts-loading">Loading charts from Notion...</div>;
@@ -78,14 +102,40 @@ function Charts() {
           ].map(([value, label]) => (
             <button
               key={value}
-              className={`range-btn ${range === value ? 'active' : ''}`}
-              onClick={() => setRange(value)}
+              className={`range-btn ${mode === 'days' && range === value ? 'active' : ''}`}
+              onClick={() => { setMode('days'); setRange(value); }}
             >
               {label}
             </button>
           ))}
+          <button
+            className={`range-btn ${mode === 'month' ? 'active' : ''}`}
+            onClick={() => setMode('month')}
+          >
+            Month
+          </button>
         </div>
       </div>
+
+      {mode === 'month' && (
+        <div className="month-nav">
+          <button
+            className="date-nav-btn"
+            onClick={() => shiftMonth(-1)}
+            disabled={availableMonths.indexOf(selectedMonth) <= 0}
+          >
+            ‹
+          </button>
+          <span className="month-label">{formatMonth(selectedMonth)}</span>
+          <button
+            className="date-nav-btn"
+            onClick={() => shiftMonth(1)}
+            disabled={availableMonths.indexOf(selectedMonth) >= availableMonths.length - 1}
+          >
+            ›
+          </button>
+        </div>
+      )}
 
       <div className="charts-averages">
         <div className="avg-stat">

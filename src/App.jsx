@@ -3,7 +3,7 @@ import './App.css';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
 import { auth } from './services/firebase';
 import Auth from './components/Auth';
-import FoodInput from './components/FoodInput';
+import ChatInput from './components/ChatInput';
 import DailySummary from './components/DailySummary';
 import MealList from './components/MealList';
 import LLMLog from './components/LLMLog';
@@ -23,8 +23,8 @@ import {
   deleteCachedFood
 } from './services/foodService';
 import { getTodayDateString } from './utils/dateUtils';
-import { generateGenZResponse } from './services/llmService';
-import { getRecentNotionLogs, syncToNotion } from './services/notionService';
+import { generateGenZResponse, routeMessage, generateChatResponse } from './services/llmService';
+import { getRecentNotionLogs, syncToNotion, updateNotionFields } from './services/notionService';
 
 function App() {
   const [user, setUser] = useState(null);
@@ -39,6 +39,7 @@ function App() {
   const [error, setError] = useState(null);
   const [llmLogs, setLlmLogs] = useState([]);
   const [successMessage, setSuccessMessage] = useState('');
+  const [chatMessages, setChatMessages] = useState([]);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
@@ -107,94 +108,100 @@ function App() {
     }
   }
 
-  async function handleFoodSubmit(text, mealType) {
+  async function handleChatSubmit(text) {
+    // Add user message to chat
+    setChatMessages((prev) => [...prev, { role: 'user', text }]);
     setLoading(true);
     setError(null);
-    setSuccessMessage(''); // Clear previous message
 
     try {
-      let newEntriesAdded = [];
-      let allEntries = [];
+      // Route the message
+      const route = await routeMessage(text);
 
-      // First, check if user is providing known nutrition
-      const knownNutritionResult = await handleKnownNutrition(text, mealType, currentDate, user.uid);
+      if (route.intent === 'chat') {
+        // Casual chat
+        const weeklyContext = await getRecentNotionLogs(7).catch(() => []);
+        const dailyCalories = entries.reduce((sum, e) => sum + (e.calories || 0), 0);
+        const dailyProtein = entries.reduce((sum, e) => sum + (e.protein || 0), 0);
+        const response = await generateChatResponse(text, weeklyContext, dailyCalories, dailyProtein);
+        setChatMessages((prev) => [...prev, { role: 'bot', text: response.message }]);
 
-      if (knownNutritionResult.hasKnownNutrition) {
-        // Handle food with known nutrition
-        const { entries: newEntries, logs } = knownNutritionResult;
-
-        // Add new entries to the top of the list
-        setEntries((prev) => {
-          allEntries = [...newEntries, ...prev];
-          return allEntries;
-        });
-        newEntriesAdded = newEntries;
-
-        // Add logs
-        setLlmLogs((prev) => [...prev, ...logs]);
-      } else {
-        // Not known nutrition, check if this is a correction
-        const correctionResult = await handleCorrection(text, entries, currentDate, user.uid);
-
-        if (correctionResult.correctionMade) {
-          // Handle correction
-          const { updatedEntry, logs } = correctionResult;
-
-          // Update the entry in the list
-          setEntries((prev) => {
-            allEntries = prev.map((entry) =>
-              entry.id === updatedEntry.id ? updatedEntry : entry
-            );
-            return allEntries;
-          });
-          newEntriesAdded = [updatedEntry];
-
-          // Add logs (include known nutrition check + correction logs)
-          setLlmLogs((prev) => [...prev, ...knownNutritionResult.logs, ...logs]);
+      } else if (route.intent === 'data_update') {
+        // Update Notion fields (steps, etc.)
+        const success = await updateNotionFields(route.date, route.updates);
+        const fields = Object.entries(route.updates).map(([k, v]) => `${k}: ${v}`).join(', ');
+        const dateLabel = new Date(route.date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+        if (success) {
+          setChatMessages((prev) => [...prev, {
+            role: 'bot',
+            text: `updated ${dateLabel} - ${fields} locked in bestie`,
+          }]);
         } else {
-          // Not a correction, process as normal food entry
+          setChatMessages((prev) => [...prev, { role: 'bot', text: "couldn't update notion rn, try again?" }]);
+        }
+
+      } else {
+        // Food-related intents (food, known_nutrition, correction)
+        const mealType = route.mealType || 'snack';
+        let newEntriesAdded = [];
+        let allEntries = [];
+
+        if (route.intent === 'known_nutrition') {
+          const result = await handleKnownNutrition(text, mealType, currentDate, user.uid);
+          if (result.hasKnownNutrition) {
+            setEntries((prev) => { allEntries = [...result.entries, ...prev]; return allEntries; });
+            newEntriesAdded = result.entries;
+            setLlmLogs((prev) => [...prev, ...result.logs]);
+          }
+        }
+
+        if (route.intent === 'correction' || (route.intent === 'known_nutrition' && newEntriesAdded.length === 0)) {
+          const result = await handleCorrection(text, entries, currentDate, user.uid);
+          if (result.correctionMade) {
+            setEntries((prev) => { allEntries = prev.map((e) => e.id === result.updatedEntry.id ? result.updatedEntry : e); return allEntries; });
+            newEntriesAdded = [result.updatedEntry];
+            setLlmLogs((prev) => [...prev, ...result.logs]);
+          }
+        }
+
+        if (newEntriesAdded.length === 0) {
+          // Regular food logging
           const { entries: newEntries, logs } = await processFoodText(text, mealType, currentDate, user.uid);
-
-          // Add new entries to the top of the list
-          setEntries((prev) => {
-            allEntries = [...newEntries, ...prev];
-            return allEntries;
-          });
+          setEntries((prev) => { allEntries = [...newEntries, ...prev]; return allEntries; });
           newEntriesAdded = newEntries;
+          setLlmLogs((prev) => [...prev, ...logs]);
+        }
 
-          // Add logs to the log list (include all checks + food processing logs)
-          setLlmLogs((prev) => [...prev, ...knownNutritionResult.logs, ...correctionResult.logs, ...logs]);
+        // Generate response + sync
+        if (newEntriesAdded.length > 0) {
+          const totalCaloriesAdded = newEntriesAdded.reduce((sum, e) => sum + (e.calories || 0), 0);
+          const totalProteinAdded = newEntriesAdded.reduce((sum, e) => sum + (e.protein || 0), 0);
+          const dailyCalories = allEntries.reduce((sum, e) => sum + (e.calories || 0), 0);
+          const dailyProtein = allEntries.reduce((sum, e) => sum + (e.protein || 0), 0);
+          const foodNames = newEntriesAdded.map(e => e.foodName || e.food);
+
+          const [weeklyContext] = await Promise.all([
+            getRecentNotionLogs(7).catch(() => []),
+            syncToNotion(currentDate, dailyCalories, dailyProtein),
+          ]);
+
+          const genZResponse = await generateGenZResponse(
+            foodNames, totalCaloriesAdded, totalProteinAdded, dailyCalories, dailyProtein, weeklyContext
+          );
+
+          setChatMessages((prev) => [...prev, {
+            role: 'bot',
+            text: genZResponse.message,
+            detail: `+${totalCaloriesAdded} cal, +${totalProteinAdded}g protein`,
+          }]);
         }
       }
-
-      // Generate Gen Z response with weekly context + sync to Notion
-      if (newEntriesAdded.length > 0) {
-        const totalCaloriesAdded = newEntriesAdded.reduce((sum, e) => sum + (e.calories || 0), 0);
-        const totalProteinAdded = newEntriesAdded.reduce((sum, e) => sum + (e.protein || 0), 0);
-        const dailyCalories = allEntries.reduce((sum, e) => sum + (e.calories || 0), 0);
-        const dailyProtein = allEntries.reduce((sum, e) => sum + (e.protein || 0), 0);
-        const foodNames = newEntriesAdded.map(e => e.food);
-
-        // Fetch weekly context from Notion and generate response in parallel with Notion sync
-        const [weeklyContext] = await Promise.all([
-          getRecentNotionLogs(7).catch(() => []),
-          syncToNotion(currentDate, dailyCalories, dailyProtein),
-        ]);
-
-        const genZResponse = await generateGenZResponse(
-          foodNames,
-          totalCaloriesAdded,
-          totalProteinAdded,
-          dailyCalories,
-          dailyProtein,
-          weeklyContext
-        );
-
-        setSuccessMessage(genZResponse.message);
-      }
     } catch (err) {
-      console.error('Error processing food:', err);
-      setError(err.message || 'Failed to process food. Please try again.');
+      console.error('Error processing message:', err);
+      setChatMessages((prev) => [...prev, {
+        role: 'bot',
+        text: `something went wrong: ${err.message || 'try again bestie'}`,
+      }]);
     } finally {
       setLoading(false);
     }
@@ -322,7 +329,7 @@ function App() {
 
         {activeTab === 'log' ? (
           <>
-            <FoodInput onSubmit={handleFoodSubmit} loading={loading} successMessage={successMessage} />
+            <ChatInput onSubmit={handleChatSubmit} loading={loading} messages={chatMessages} />
 
             <DailySummary entries={entries} />
 
