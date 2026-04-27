@@ -2,7 +2,7 @@ import axios from 'axios';
 
 const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
 const GROQ_API_KEY = import.meta.env.VITE_GROQ_API_KEY;
-const MODEL = 'llama-3.1-8b-instant'; // Fast model for simple tasks
+const MODEL = 'llama-3.3-70b-versatile'; // Smarter model for better accuracy
 
 // Warn if API key is missing
 if (!GROQ_API_KEY) {
@@ -221,8 +221,18 @@ Look for quantity numbers at the start. Look for "each", "per", "apiece" to dete
  * Generate a Gen Z style response after logging food
  * Returns { message: string, rawResponse: string }
  */
-export async function generateGenZResponse(foodsLogged, totalCalories, totalProtein, dailyCalories, dailyProtein) {
+export async function generateGenZResponse(foodsLogged, totalCalories, totalProtein, dailyCalories, dailyProtein, weeklyContext = null) {
   try {
+    let weeklyInfo = '';
+    if (weeklyContext && weeklyContext.length > 0) {
+      const recentDays = weeklyContext.map(d =>
+        `${d.date}: ${d.calories ?? '?'} cal, ${d.protein ?? '?'}g protein, ${d.steps ?? '?'} steps`
+      ).join('\n');
+      const avgCal = Math.round(weeklyContext.reduce((s, d) => s + (d.calories || 0), 0) / weeklyContext.filter(d => d.calories).length) || 0;
+      const avgProtein = Math.round(weeklyContext.reduce((s, d) => s + (d.protein || 0), 0) / weeklyContext.filter(d => d.protein).length) || 0;
+      weeklyInfo = `\n\nRecent days (for context on trends):\n${recentDays}\nWeekly avg: ${avgCal} cal, ${avgProtein}g protein. Target: 2700 cal.`;
+    }
+
     const response = await axios.post(
       GROQ_API_URL,
       {
@@ -230,22 +240,22 @@ export async function generateGenZResponse(foodsLogged, totalCalories, totalProt
         messages: [
           {
             role: 'system',
-            content: `You are a Gen Z fitness buddy who's supportive, funny, and uses modern slang. Generate a short (1-2 sentences) response after someone logs their food. Be encouraging, use Gen Z slang naturally (bestie, ngl, slaps, ate, slay, lowkey, highkey, fr, no cap, etc.), and reference their progress. Keep it fun and casual. Don't use emojis excessively - maybe 1-2 max. Return ONLY the message text, no JSON.
+            content: `You are a Gen Z fitness buddy who's supportive, funny, and uses modern slang. Generate a short (1-2 sentences) response after someone logs their food. Be encouraging, use Gen Z slang naturally (bestie, ngl, slaps, ate, slay, lowkey, highkey, fr, no cap, etc.), and reference their progress. If you have weekly context, reference trends (e.g. streak of hitting target, binge recovery, protein consistency). Keep it fun and casual. Don't use emojis excessively - maybe 1-2 max. Return ONLY the message text, no JSON.
 
 Examples:
-- "logged bestie! that's 420 cals, you're at 1240/2000 today. we're eating it up literally"
+- "logged bestie! that's 420 cals, you're at 1240/2700 today. 3 days under target in a row, we're locked in fr"
 - "yesss 35g protein fr? that's giving health icon, you're slaying today ngl"
-- "ok lowkey that's a lot of calories but no judgment here, we support the grind"
+- "ok lowkey that's a lot of calories but yesterday you were under so it balances out bestie"
 - "560 cals logged! you're at 1800 today which slaps, keep it up bestie"
-- "sheesh that protein tho 💪 you're highkey hitting your goals today no cap"`
+- "protein been hitting different this week, averaging 160g no cap 💪"`
           },
           {
             role: 'user',
-            content: `Foods logged: ${foodsLogged.join(', ')}. Total added: ${totalCalories} calories, ${totalProtein}g protein. Daily total so far: ${dailyCalories} calories, ${dailyProtein}g protein.`
+            content: `Foods logged: ${foodsLogged.join(', ')}. Total added: ${totalCalories} calories, ${totalProtein}g protein. Daily total so far: ${dailyCalories} calories, ${dailyProtein}g protein.${weeklyInfo}`
           }
         ],
         temperature: 0.9,
-        max_tokens: 100
+        max_tokens: 150
       },
       {
         headers: {

@@ -24,6 +24,7 @@ import {
 } from './services/foodService';
 import { getTodayDateString } from './utils/dateUtils';
 import { generateGenZResponse } from './services/llmService';
+import { getRecentNotionLogs, syncToNotion } from './services/notionService';
 
 function App() {
   const [user, setUser] = useState(null);
@@ -166,7 +167,7 @@ function App() {
         }
       }
 
-      // Generate Gen Z response
+      // Generate Gen Z response with weekly context + sync to Notion
       if (newEntriesAdded.length > 0) {
         const totalCaloriesAdded = newEntriesAdded.reduce((sum, e) => sum + (e.calories || 0), 0);
         const totalProteinAdded = newEntriesAdded.reduce((sum, e) => sum + (e.protein || 0), 0);
@@ -174,12 +175,19 @@ function App() {
         const dailyProtein = allEntries.reduce((sum, e) => sum + (e.protein || 0), 0);
         const foodNames = newEntriesAdded.map(e => e.food);
 
+        // Fetch weekly context from Notion and generate response in parallel with Notion sync
+        const [weeklyContext] = await Promise.all([
+          getRecentNotionLogs(7).catch(() => []),
+          syncToNotion(currentDate, dailyCalories, dailyProtein),
+        ]);
+
         const genZResponse = await generateGenZResponse(
           foodNames,
           totalCaloriesAdded,
           totalProteinAdded,
           dailyCalories,
-          dailyProtein
+          dailyProtein,
+          weeklyContext
         );
 
         setSuccessMessage(genZResponse.message);
@@ -197,11 +205,18 @@ function App() {
       await updateMealEntry(entryId, updates, currentDate, user.uid);
 
       // Update the entry in the list
-      setEntries((prev) =>
-        prev.map((entry) =>
+      let updatedEntries;
+      setEntries((prev) => {
+        updatedEntries = prev.map((entry) =>
           entry.id === entryId ? { ...entry, ...updates } : entry
-        )
-      );
+        );
+        return updatedEntries;
+      });
+
+      // Sync to Notion
+      const dailyCalories = updatedEntries.reduce((sum, e) => sum + (e.calories || 0), 0);
+      const dailyProtein = updatedEntries.reduce((sum, e) => sum + (e.protein || 0), 0);
+      syncToNotion(currentDate, dailyCalories, dailyProtein);
     } catch (err) {
       console.error('Error updating entry:', err);
       setError('Failed to update entry. Please try again.');
@@ -213,7 +228,16 @@ function App() {
       await deleteMealEntry(entryId, currentDate, user.uid);
 
       // Remove the entry from the list
-      setEntries((prev) => prev.filter((entry) => entry.id !== entryId));
+      let updatedEntries;
+      setEntries((prev) => {
+        updatedEntries = prev.filter((entry) => entry.id !== entryId);
+        return updatedEntries;
+      });
+
+      // Sync to Notion
+      const dailyCalories = updatedEntries.reduce((sum, e) => sum + (e.calories || 0), 0);
+      const dailyProtein = updatedEntries.reduce((sum, e) => sum + (e.protein || 0), 0);
+      syncToNotion(currentDate, dailyCalories, dailyProtein);
     } catch (err) {
       console.error('Error deleting entry:', err);
       setError('Failed to delete entry. Please try again.');
