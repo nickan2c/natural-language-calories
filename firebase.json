@@ -17,6 +17,10 @@
     ],
     "rewrites": [
       {
+        "source": "/api/notion",
+        "function": "notionProxy"
+      },
+      {
         "source": "/api/notion/**",
         "function": "notionProxy"
       },
