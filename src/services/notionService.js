@@ -1,5 +1,34 @@
 const NOTION_TOKEN = import.meta.env.VITE_NOTION_TOKEN;
 const DATABASE_ID = import.meta.env.VITE_NOTION_DATABASE_ID;
+const isDev = import.meta.env.DEV;
+
+/**
+ * In dev: Vite proxy handles CORS, client sends auth headers
+ * In prod: Firebase Cloud Function proxies to Notion with server-side auth
+ */
+async function notionFetch(apiPath, options = {}) {
+  if (isDev) {
+    // Dev: Vite proxy rewrites /api/notion -> https://api.notion.com
+    return fetch(`/api/notion${apiPath}`, {
+      ...options,
+      headers: {
+        'Authorization': `Bearer ${NOTION_TOKEN}`,
+        'Notion-Version': '2022-06-28',
+        'Content-Type': 'application/json',
+        ...options.headers,
+      },
+    });
+  } else {
+    // Prod: Cloud Function at /api/notion?path=...
+    return fetch(`/api/notion?path=${encodeURIComponent(apiPath)}`, {
+      ...options,
+      headers: {
+        'Content-Type': 'application/json',
+        ...options.headers,
+      },
+    });
+  }
+}
 
 export async function fetchNotionDailyLogs() {
   const allResults = [];
@@ -13,13 +42,8 @@ export async function fetchNotionDailyLogs() {
     };
     if (startCursor) body.start_cursor = startCursor;
 
-    const res = await fetch(`/api/notion/v1/databases/${DATABASE_ID}/query`, {
+    const res = await notionFetch(`/v1/databases/${DATABASE_ID}/query`, {
       method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${NOTION_TOKEN}`,
-        'Notion-Version': '2022-06-28',
-        'Content-Type': 'application/json',
-      },
       body: JSON.stringify(body),
     });
 
@@ -48,19 +72,12 @@ function parseNotionRow(page) {
   };
 }
 
-const notionHeaders = {
-  'Authorization': `Bearer ${NOTION_TOKEN}`,
-  'Notion-Version': '2022-06-28',
-  'Content-Type': 'application/json',
-};
-
 /**
  * Get recent days from Notion for LLM context
  */
 export async function getRecentNotionLogs(days = 7) {
-  const res = await fetch(`/api/notion/v1/databases/${DATABASE_ID}/query`, {
+  const res = await notionFetch(`/v1/databases/${DATABASE_ID}/query`, {
     method: 'POST',
-    headers: notionHeaders,
     body: JSON.stringify({
       page_size: days,
       sorts: [{ property: 'Date', direction: 'descending' }],
@@ -77,9 +94,8 @@ export async function getRecentNotionLogs(days = 7) {
  * Find today's Notion row, or null if it doesn't exist
  */
 async function findNotionRowByDate(dateStr) {
-  const res = await fetch(`/api/notion/v1/databases/${DATABASE_ID}/query`, {
+  const res = await notionFetch(`/v1/databases/${DATABASE_ID}/query`, {
     method: 'POST',
-    headers: notionHeaders,
     body: JSON.stringify({
       filter: {
         property: 'Date',
@@ -103,10 +119,8 @@ export async function syncToNotion(dateStr, calories, protein) {
     const existing = await findNotionRowByDate(dateStr);
 
     if (existing) {
-      // Update existing row
-      const res = await fetch(`/api/notion/v1/pages/${existing.id}`, {
+      const res = await notionFetch(`/v1/pages/${existing.id}`, {
         method: 'PATCH',
-        headers: notionHeaders,
         body: JSON.stringify({
           properties: {
             'Calories': { number: calories },
@@ -117,14 +131,12 @@ export async function syncToNotion(dateStr, calories, protein) {
       if (!res.ok) throw new Error(`Notion update failed: ${res.status}`);
       console.log(`Updated Notion row for ${dateStr}: ${calories} cal, ${protein}g protein`);
     } else {
-      // Create new row
       const dayLabel = new Date(dateStr + 'T00:00:00').toLocaleDateString('en-US', {
         weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
       });
 
-      const res = await fetch('/api/notion/v1/pages', {
+      const res = await notionFetch('/v1/pages', {
         method: 'POST',
-        headers: notionHeaders,
         body: JSON.stringify({
           parent: { database_id: DATABASE_ID },
           properties: {

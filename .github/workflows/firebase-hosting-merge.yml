@@ -22,6 +22,12 @@ jobs:
           VITE_GROQ_API_KEY: ${{ secrets.VITE_GROQ_API_KEY }}
           VITE_NOTION_TOKEN: ${{ secrets.VITE_NOTION_TOKEN }}
           VITE_NOTION_DATABASE_ID: ${{ secrets.VITE_NOTION_DATABASE_ID }}
+      - run: echo "NOTION_TOKEN=${{ secrets.VITE_NOTION_TOKEN }}" > functions/.env
+      - run: cd functions && npm ci
+      - run: |
+          echo '${{ secrets.FIREBASE_SERVICE_ACCOUNT_NATURAL_LANGUAGE_CALORIES }}' > /tmp/sa.json
+          export GOOGLE_APPLICATION_CREDENTIALS=/tmp/sa.json
+          npx firebase-tools deploy --only functions --project natural-language-calories
       - uses: FirebaseExtended/action-hosting-deploy@v0
         with:
           repoToken: ${{ secrets.GITHUB_TOKEN }}
